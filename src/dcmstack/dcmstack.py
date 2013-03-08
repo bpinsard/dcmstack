@@ -498,7 +498,25 @@ class DicomStack(object):
         self._repetition_times.add(meta.get('RepetitionTime'))
         
         #Pull the info used for sorting
-        slice_pos = dw.slice_indicator
+        if 'CsaImage.SliceNormalVector' in meta:
+            slice_dir = np.array(meta['CsaImage.SliceNormalVector'])
+            slice_pos = np.dot(slice_dir, 
+                           np.array(meta['ImagePositionPatient']))
+        elif 'PerFrameFunctionalGroupsSequence' in meta:
+            frameOrientation = meta['PerFrameFunctionalGroupsSequence'][0]['PlaneOrientationSequence'][0]['ImageOrientationPatient']
+            framePosition = meta['PerFrameFunctionalGroupsSequence'][0]['PlanePositionSequence'][0]['ImagePositionPatient']
+            slice_dir = np.cross(frameOrientation[:3],frameOrientation[3:],)
+            slice_pos = np.dot(slice_dir, 
+                           np.array(framePosition))
+            self._contains_multiframe = True
+            self._multiframe_dcm = dcm
+        else:
+            slice_dir = np.cross(meta['ImageOrientationPatient'][:3],
+                                 meta['ImageOrientationPatient'][3:],
+                                )
+            slice_pos = np.dot(slice_dir, 
+                           np.array(meta['ImagePositionPatient']))
+
         self._slice_pos_vals.add(slice_pos)
         time_val = None
         if self._time_order:
@@ -643,7 +661,7 @@ class DicomStack(object):
                 raise InvalidStackError("Slice spacings are not consistent")
         
         #Simple check for an incomplete stack
-        if len(self._files_info) % files_per_vol != 0:
+        if len(self._files_info) % files_per_vol != 0: 
             raise InvalidStackError("Number of files is not an even multiple "
                                     "of the number of unique slice positions.")
         num_volumes = len(self._files_info) / files_per_vol
@@ -734,6 +752,14 @@ class DicomStack(object):
         '''
         #Create a numpy array for storing the voxel data
         stack_shape = self.get_shape()
+        if self._contains_multiframe:
+            n_mrslices = self._multiframe_dcm['0x2001','0x1018'].value
+            n_frames = self._multiframe_dcm.NumberOfFrames
+            n_temporal_pos = int(self._multiframe_dcm.PerFrameFunctionalGroupsSequence[0][0x2005,0x140f][0]['0x0020','0x0105'].value)
+            if n_mrslices > 0 and n_frames > 1 and n_temporal_pos > 0:
+                self._contains_e_4d = True
+                temp_shape = (stack_shape[0], stack_shape[1], n_mrslices, n_frames / n_mrslices)
+                stack_shape = temp_shape
         stack_shape = tuple(list(stack_shape) + ((5 - len(stack_shape)) * [1]))
         vox_array = np.empty(stack_shape, np.int16)        
         
@@ -747,7 +773,15 @@ class DicomStack(object):
         file_shape = self._files_info[0][0].nii_img.get_shape()
         for vec_idx in range(stack_shape[4]):
             for time_idx in range(stack_shape[3]):
-                if files_per_vol == 1 and file_shape[2] != 1:
+                if self._contains_e_4d:
+                    if len(self._files_info[0][0].nii_img.shape)<3:
+                        for slice_idx in range(stack_shape[2]):
+                            vox_array[:, :, slice_idx, time_idx, vec_idx] = \
+                                self._files_info[0][0].nii_img.get_data()[:, :, time_idx + stack_shape[3]*slice_idx]
+                    elif self._files_info[0][0].nii_img.shape[3]==stack_shape[3]:
+                        vox_array[:, :, :, time_idx, vec_idx] = \
+                                self._files_info[0][0].nii_img.get_data()[:, :, :, time_idx]
+                elif files_per_vol == 1 and file_shape[2] != 1:
                     file_idx = vec_idx*(stack_shape[3]) + time_idx
                     vox_array[:, :, :, time_idx, vec_idx] = \
                         self._files_info[file_idx][0].nii_img.get_data()
@@ -944,7 +978,7 @@ class DicomStack(object):
                         
                 meta_ext = DcmMetaExtension.from_sequence(vec_meta, 4)
             elif len(data.shape) == 4:
-                meta_ext = DcmMetaExtension.from_sequence(vol_meta, 3)
+                meta_ext = DcmMetaExtension.from_sequence(vol_meta, 4)
             else:
                 meta_ext = vol_meta[0]
                 if meta_ext is file_info[0].meta_ext:

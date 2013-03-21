@@ -433,6 +433,8 @@ class DicomStack(object):
             self._meta_filter = meta_filter
         
         self._allow_dummies = allow_dummies
+        self._contains_multiframe = False
+        self._contains_e_4d = False
         
         #Sets all the state variables to their defaults
         self.clear()
@@ -493,10 +495,7 @@ class DicomStack(object):
         dw = wrapper_from_data(dcm)
 
         is_dummy = self._chk_congruent(meta)
-        
-        self._phase_enc_dirs.add(meta.get('InPlanePhaseEncodingDirection'))
-        self._repetition_times.add(meta.get('RepetitionTime'))
-        
+                
         #Pull the info used for sorting
         if 'CsaImage.SliceNormalVector' in meta:
             slice_dir = np.array(meta['CsaImage.SliceNormalVector'])
@@ -516,6 +515,13 @@ class DicomStack(object):
                                 )
             slice_pos = np.dot(slice_dir, 
                            np.array(meta['ImagePositionPatient']))
+
+        if self._contains_multiframe:
+            self._phase_enc_dirs.add(meta['SharedFunctionalGroupsSequence'][0]['MRFOVGeometrySequence'][0]['InPlanePhaseEncodingDirection'])
+            self._repetition_times.add(meta['SharedFunctionalGroupsSequence'][0]['MRTimingAndRelatedParametersSequence'][0]['RepetitionTime'])
+        else:
+            self._phase_enc_dirs.add(meta.get('InPlanePhaseEncodingDirection'))
+            self._repetition_times.add(meta.get('RepetitionTime'))
 
         self._slice_pos_vals.add(slice_pos)
         time_val = None
@@ -978,7 +984,11 @@ class DicomStack(object):
                         
                 meta_ext = DcmMetaExtension.from_sequence(vec_meta, 4)
             elif len(data.shape) == 4:
-                meta_ext = DcmMetaExtension.from_sequence(vol_meta, 4)
+                if len(vol_meta) == 1 and (vol_meta[0].shape)==data.shape:
+                    #multiframe 4d
+                    meta_ext = vol_meta[0]
+                else:
+                    meta_ext = DcmMetaExtension.from_sequence(vol_meta, 3)
             else:
                 meta_ext = vol_meta[0]
                 if meta_ext is file_info[0].meta_ext:

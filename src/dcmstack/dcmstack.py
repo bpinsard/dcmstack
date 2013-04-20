@@ -783,7 +783,7 @@ class DicomStack(object):
             n_mrslices = self._multiframe_dcm['0x2001','0x1018'].value
             n_frames = self._multiframe_dcm.NumberOfFrames
             n_temporal_pos = int(self._multiframe_dcm.PerFrameFunctionalGroupsSequence[0][0x2005,0x140f][0]['0x0020','0x0105'].value)
-            if n_mrslices > 0 and n_frames > 1 and n_temporal_pos > 0:
+            if n_mrslices > 0 and n_frames > 1 and n_temporal_pos > 1:
                 self._contains_e_4d = True
                 temp_shape = (stack_shape[0], stack_shape[1], n_mrslices, n_frames / n_mrslices)
                 stack_shape = temp_shape

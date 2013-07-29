@@ -788,7 +788,13 @@ class DicomStack(object):
                 temp_shape = (stack_shape[0], stack_shape[1], n_mrslices, n_frames / n_mrslices)
                 stack_shape = temp_shape
         stack_shape = tuple(list(stack_shape) + ((5 - len(stack_shape)) * [1]))
-        vox_array = np.empty(stack_shape, np.int16)        
+        stack_dtype = self._files_info[0][0].nii_img.get_data_dtype()
+        #This is a hack to keep fslview happy, Shouldn't cause issues as the 
+        #original data should be 12-bit and any scaling will result in float 
+        #data
+        if stack_dtype == np.uint16:
+            stack_dtype = np.int16
+        vox_array = np.empty(stack_shape, dtype=stack_dtype)        
         
         #Fill the array with data
         n_vols = 1
@@ -870,7 +876,8 @@ class DicomStack(object):
         ----------
         voxel_order : str
             A three character string repsenting the voxel order in patient 
-            space (see the function `reorder_voxels`).
+            space (see the function `reorder_voxels`). Can be None or an empty 
+            string to disable reorientation.
             
         embed_meta : bool
             If true a dcmmeta.DcmMetaExtension will be embedded in the Nifti 

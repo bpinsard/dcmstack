@@ -12,10 +12,12 @@ from nibabel.orientations import (io_orientation,
                                   inv_ornt_aff)
 import numpy as np
 from .dcmmeta import DcmMetaExtension, NiftiWrapper
+import struct, itertools
 
 with warnings.catch_warnings():
     warnings.simplefilter('ignore')
-    from nibabel.nicom.dicomwrappers import wrapper_from_data
+    from nibabel.nicom.dicomwrappers import (wrapper_from_data, 
+                                             wrapper_from_file)
 
 def make_key_regex_filter(exclude_res, force_include_res=None):
     '''Make a meta data filter using regular expressions.
@@ -995,9 +997,168 @@ class DicomStack(object):
         generated from the result.
         '''
         return NiftiWrapper(self.to_nifti(voxel_order, True))
+
+
+class DicomStackOnline(DicomStack):
+
+    def _init_dataset(self):
+        if hasattr(self,'_is_init') and self._is_init:
+            return
+        # try to find information about dataset in a single dicom
+        self._shape = None        
+        self._slice_order = None
+
+        dicom_source, self._dicom_source = itertools.tee(self._dicom_source)
+        dw = wrapper_from_data(dicom_source.next())
+        self._shape = dw.image_shape
+        self._nframes_per_dicom = 1
+        self.nframes, self.nslices = 0, 0
+        if len(self._shape) < 3:
+            self._nslices_per_dicom = 1
+            self._nframes_per_dicom = 0
+            if not dw.get((0x2001, 0x1018)) is None:
+                self.nslices = dw.get((0x2001,0x1018)).value
+                if isinstance(self.nslices, str):
+                    self.nslices = struct.unpack('i', self.nslices)[0]
+                self.nslices = int(self.nslices)
+            self._shape += (self.nslices,)
+        else:
+            self._nslices_per_dicom = self._shape[2]
+            self.nslices = self._shape[2]
+        if len(self._shape) < 4:
+            if not dw.get('NumberOfTemporalPositions') is None:
+                self.nframes = int(dw.get('NumberOfTemporalPositions'))
+            self._shape += (self.nframes,)
+        else:
+            self._nframes_per_dicom = self._shape[3]
+            self.nframes = self._shape[3]
+            
+        if dw.is_mosaic:
+            self._slice_trigger_times = dw.csa_header['tags'].get(
+                'MosaicRefAcqTimes')['items']
+            self._slice_order = np.argsort(self._slice_trigger_times)
+        elif dw.is_multiframe:
+            self._slice_order = np.arange(self.nslices)
+            tr=dw.shared.MRTimingAndRelatedParametersSequence[0].RepetitionTime
+            self._slice_trigger_times = np.linspace(
+                0, tr*1e-3, self.nslices+1)[:-1]
+        else:
+            self._slice_locations = []
+            self._slice_trigger_times = []
+            for df in dicom_source:
+                dw = wrapper_from_data(df)
+                if not dw.slice_indicator in self._slice_locations:
+                    self._slice_locations.append(dw.slice_indicator)
+                    if not dw.get((0x0021, 0x105e)) is None: #RTIA Timer
+                        self._slice_trigger_times.append(
+                            float(dw.get((0x0021,0x105e)).value))
+                    # todo: deal with other cases than GE
+                else:
+                    if self.nslices ==0:
+                        self.nslices = len(self._slice_locations)
+                        if not len(self._slice_trigger_times):
+                            self._slice_trigger_times = np.linspace(
+                                0, dw.get('RepetitionTime')*1e-3, self.nslices+1)[:-1]
+
+                    self._slice_order = np.argsort(self._slice_trigger_times)
+                    break
+            self._slice_trigger_times = [self._slice_trigger_times[i] \
+                for i in np.argsort(self._slice_locations)]
+            self._slice_locations = sorted(self._slice_locations)
+            
+        self._is_init = True
+
+
+    def set_source(self, dicom_source):
+        self._dicom_source = dicom_source
+
+    def iter_frame(self, data=True):
+        # iterate on each acquired volume
+        self._init_dataset()
+        nframe, nslices = 0, 0
+        for df in self._dicom_source:
+            dw = wrapper_from_data(df)
+            frame_data = None
+            if self._nframes_per_dicom is 1:
+                if data:
+                    frame_data = dw.get_data()
+                yield nframe, dw.get_affine(), frame_data
+                nframe += 1
+            elif self._nframes_per_dicom > 1:
+                if data:
+                    frames_data = dw.get_data()
+                for t in xrange(self._shape[-1]):
+                    if data:
+                        frame_data = frames_data[...,t]
+                    yield nframe, dw.get_affine(), frame_data
+                    nframe += 1
+            else:
+                if data:
+                    if frame_data is None:
+                        frame_data = np.array(self._shape[:3])
+                    frame_data[...,nslices] = dw.get_data()
+                nslices += 1
+                if nslices == self.nslices:
+                    yield nframe, dw.get_affine(), frame_data
+                    nframe += 1
+                    nslices = 0
+            
+    
+    def iter_slices(self, data=True, slice_order='acq_time'):
+        # iterate on each slice in the temporal order they are acquired
+        self._init_dataset()
+        nframe, nslices = 0, 0
+        slices_buffer = [None]*self.nslices
+
+        slice_seq = self._slice_order
+        if slice_order is 'ascending':
+            slice_seq = np.arange(0,self.nslices)
+        elif slice_order is 'descending':
+            slice_seq = np.arange(self.nslices,0,-1)-1
+
+        for df in self._dicom_source:
+            dw = wrapper_from_data(df)
+            slice_data = None
+            if self._nframes_per_dicom is 1:
+                if data:
+                    frame_data = dw.get_data()
+                for sl in slice_seq:
+                    if data:
+                        slice_data = frame_data[...,sl]
+                    yield nframe, sl, dw.get_affine(), \
+                        self._slice_trigger_times[sl], slice_data
+                nframe += 1
+            elif self._nframes_per_dicom > 1:
+                if data:
+                    frames_data = dw.get_data()
+                for t in xrange(self._nframes_per_dicom):
+                    for sl in slice_seq:
+                        if data:
+                            slice_data = frames_data[...,sl,t]
+                            yield nframe, sl, dw.get_affine(), \
+                                self._slice_trigger_times[sl], slice_data
+                    nframe += 1
+            else:
+                # buffer incoming slices to
+                pos = self._slice_locations.index(dw.slice_indicator)
+                slices_buffer[pos] = dw
+                sl = slice_seq[nslices]
+                while slices_buffer[sl] is not None:
+                    dw = slices_buffer[sl]
+                    slices_buffer[sl] = None
+                    if data:
+                        slice_data = dw.get_data()
+                    yield nframe, nslices, dw.get_affine(), \
+                        self._slice_trigger_times[nslices], slice_data
+                    nslices += 1
+                    if nslices == self.nslices:
+                        nframe += 1
+                        nslices = 0
+            del dw
         
 def parse_and_group(src_paths, group_by=default_group_keys, extractor=None, 
-                    force=False, warn_on_except=False):
+                    force=False, warn_on_except=False, 
+                    defer_size=None,stop_before_pixels=False):
     '''Parse the given dicom files and group them together. Each group is 
     stored as a (list) value in a dict where the key is a tuple of values 
     corresponding to the keys in 'group_by'
@@ -1038,7 +1199,9 @@ def parse_and_group(src_paths, group_by=default_group_keys, extractor=None,
     for dcm_path in src_paths:
         #Read the DICOM file
         try:
-            dcm = dicom.read_file(dcm_path, force=force)
+            dcm = dicom.read_file(dcm_path, force=force, 
+                                  defer_size=defer_size,
+                                  stop_before_pixels=stop_before_pixels)
         except Exception, e:
             if warn_on_except:
                 warnings.warn('Error reading file %s: %s' % (dcm_path, str(e)))

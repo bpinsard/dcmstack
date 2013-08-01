@@ -1056,16 +1056,15 @@ class DicomStackOnline(DicomStack):
                 else:
                     if self.nslices ==0:
                         self.nslices = len(self._slice_locations)
-                        if not len(self._slice_trigger_times):
-                            self._slice_trigger_times = np.linspace(
-                                0, dw.get('RepetitionTime')*1e-3, self.nslices+1)[:-1]
-
-                    self._slice_order = np.argsort(self._slice_trigger_times)
                     break
-            self._slice_trigger_times = [self._slice_trigger_times[i] \
-                for i in np.argsort(self._slice_locations)]
+            if not len(self._slice_trigger_times):
+                self._slice_trigger_times = np.linspace(
+                    0, dw.get('RepetitionTime')*1e-3, self.nslices+1)[:-1]
+            else:
+                self._slice_trigger_times = [self._slice_trigger_times[i] \
+                    for i in np.argsort(self._slice_locations)]
+            self._slice_order = np.argsort(self._slice_trigger_times)
             self._slice_locations = sorted(self._slice_locations)
-            
         self._is_init = True
 
 
@@ -1078,28 +1077,30 @@ class DicomStackOnline(DicomStack):
         nframe, nslices = 0, 0
         for df in self._dicom_source:
             dw = wrapper_from_data(df)
+            nw = NiftiWrapper.from_dicom_wrapper(dw)
             frame_data = None
             if self._nframes_per_dicom is 1:
                 if data:
-                    frame_data = dw.get_data()
-                yield nframe, dw.get_affine(), frame_data
+                    frame_data = nw.get_data()
+                yield nframe, nw.nii_img.get_affine(), frame_data
                 nframe += 1
             elif self._nframes_per_dicom > 1:
                 if data:
-                    frames_data = dw.get_data()
+                    frames_data = nw.nii_img.get_data()
                 for t in xrange(self._shape[-1]):
                     if data:
                         frame_data = frames_data[...,t]
-                    yield nframe, dw.get_affine(), frame_data
+                    yield nframe, nw.nii_img.get_affine(), frame_data
                     nframe += 1
             else:
                 if data:
+                    pos = self._slice_locations.index(dw.slice_indicator)
                     if frame_data is None:
-                        frame_data = np.array(self._shape[:3])
-                    frame_data[...,nslices] = dw.get_data()
+                        frame_data = np.empty(self._shape[:3])
+                    frame_data[...,pos] = nw.nii_img.get_data()[...,0]
                 nslices += 1
                 if nslices == self.nslices:
-                    yield nframe, dw.get_affine(), frame_data
+                    yield nframe, nw.nii_img.get_affine(), frame_data
                     nframe += 1
                     nslices = 0
             
@@ -1118,38 +1119,39 @@ class DicomStackOnline(DicomStack):
 
         for df in self._dicom_source:
             dw = wrapper_from_data(df)
+            nw = NiftiWrapper.from_dicom_wrapper(dw)
             slice_data = None
             if self._nframes_per_dicom is 1:
                 if data:
-                    frame_data = dw.get_data()
+                    frame_data = nw.nii_img.get_data()
                 for sl in slice_seq:
                     if data:
                         slice_data = frame_data[...,sl]
-                    yield nframe, sl, dw.get_affine(), \
+                    yield nframe, sl, nw.nii_img.get_affine(), \
                         self._slice_trigger_times[sl], slice_data
                 nframe += 1
             elif self._nframes_per_dicom > 1:
                 if data:
-                    frames_data = dw.get_data()
+                    frames_data = nw.nii_img.get_data()
                 for t in xrange(self._nframes_per_dicom):
                     for sl in slice_seq:
                         if data:
                             slice_data = frames_data[...,sl,t]
-                            yield nframe, sl, dw.get_affine(), \
+                            yield nframe, sl, nw.nii_img.get_affine(), \
                                 self._slice_trigger_times[sl], slice_data
                     nframe += 1
             else:
                 # buffer incoming slices to
                 pos = self._slice_locations.index(dw.slice_indicator)
-                slices_buffer[pos] = dw
+                slices_buffer[pos] = dw,nw
                 sl = slice_seq[nslices]
                 while slices_buffer[sl] is not None:
-                    dw = slices_buffer[sl]
+                    dw,nw = slices_buffer[sl]
                     slices_buffer[sl] = None
                     if data:
-                        slice_data = dw.get_data()
-                    yield nframe, nslices, dw.get_affine(), \
-                        self._slice_trigger_times[nslices], slice_data
+                        slice_data = nw.nii_img.get_data()[...,0]
+                    yield nframe, nslices, nw.nii_img.get_affine(), \
+                        self._slice_trigger_times[sl], slice_data
                     nslices += 1
                     if nslices == self.nslices:
                         nframe += 1

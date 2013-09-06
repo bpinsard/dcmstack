@@ -1150,9 +1150,10 @@ class DicomStackOnline(DicomStack):
                     slices_buffer[sl] = None
                     if data:
                         slice_data = nw.nii_img.get_data()[...,0]
-                    yield nframe, nslices, nw.nii_img.get_affine(), \
+                    yield nframe, sl, nw.nii_img.get_affine(), \
                         self._slice_trigger_times[sl], slice_data
                     nslices += 1
+                    sl = slice_seq[nslices]
                     if nslices == self.nslices:
                         nframe += 1
                         nslices = 0

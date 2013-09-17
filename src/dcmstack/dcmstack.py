@@ -1153,10 +1153,10 @@ class DicomStackOnline(DicomStack):
                     yield nframe, sl, nw.nii_img.get_affine(), \
                         self._slice_trigger_times[sl], slice_data
                     nslices += 1
-                    sl = slice_seq[nslices]
                     if nslices == self.nslices:
                         nframe += 1
                         nslices = 0
+                    sl = slice_seq[nslices]
             del dw
         
 def parse_and_group(src_paths, group_by=default_group_keys, extractor=None, 

@@ -1007,6 +1007,7 @@ class DicomStackOnline(DicomStack):
         # try to find information about dataset in a single dicom
         self._shape = None        
         self._slice_order = None
+        self.frame_idx, self.slice_idx = 0, 0
 
         dicom_source, self._dicom_source = itertools.tee(self._dicom_source)
         dw = wrapper_from_data(dicom_source.next())
@@ -1018,8 +1019,10 @@ class DicomStackOnline(DicomStack):
             self._nframes_per_dicom = 0
             if not dw.get((0x2001, 0x1018)) is None:
                 self.nslices = dw.get((0x2001,0x1018)).value
-                if isinstance(self.nslices, str):
-                    self.nslices = struct.unpack('i', self.nslices)[0]
+            elif not dw.get((0x0021,0x104f)) is None:
+                self.nslices = dw.get((0x0021,0x104f)).value
+            if isinstance(self.nslices, str):
+                self.nslices = struct.unpack('i', self.nslices)[0]
                 self.nslices = int(self.nslices)
             self._shape += (self.nslices,)
         else:
@@ -1045,18 +1048,17 @@ class DicomStackOnline(DicomStack):
         else:
             self._slice_locations = []
             self._slice_trigger_times = []
-            for df in dicom_source:
+            while not dw.slice_indicator in self._slice_locations:
+                self._slice_locations.append(dw.slice_indicator)
+                tt = dw.get((0x0018, 0x1060)) #TriggerTime
+                if tt is None:
+                    tt = dw.get((0x0021, 0x105e)) #RTIA Timer
+                if not tt  is None:
+                    self._slice_trigger_times.append(float(tt.value))
+                df = dicom_source.next()
                 dw = wrapper_from_data(df)
-                if not dw.slice_indicator in self._slice_locations:
-                    self._slice_locations.append(dw.slice_indicator)
-                    if not dw.get((0x0021, 0x105e)) is None: #RTIA Timer
-                        self._slice_trigger_times.append(
-                            float(dw.get((0x0021,0x105e)).value))
-                    # todo: deal with other cases than GE
-                else:
-                    if self.nslices ==0:
-                        self.nslices = len(self._slice_locations)
-                    break
+            if self.nslices ==0:
+                self.nslices = len(self._slice_locations)
             if not len(self._slice_trigger_times):
                 self._slice_trigger_times = np.linspace(
                     0, dw.get('RepetitionTime')*1e-3, self.nslices+1)[:-1]
@@ -1074,16 +1076,15 @@ class DicomStackOnline(DicomStack):
     def iter_frame(self, data=True):
         # iterate on each acquired volume
         self._init_dataset()
-        nframe, nslices = 0, 0
         for df in self._dicom_source:
             dw = wrapper_from_data(df)
             nw = NiftiWrapper.from_dicom_wrapper(dw)
             frame_data = None
             if self._nframes_per_dicom is 1:
                 if data:
-                    frame_data = nw.get_data()
-                yield nframe, nw.nii_img.get_affine(), frame_data
-                nframe += 1
+                    frame_data = nw.nii_img.get_data()
+                yield self.frame_idx, nw.nii_img.get_affine(), frame_data
+                self.frame_idx += 1
             elif self._nframes_per_dicom > 1:
                 if data:
                     frames_data = nw.nii_img.get_data()
@@ -1091,24 +1092,23 @@ class DicomStackOnline(DicomStack):
                     if data:
                         frame_data = frames_data[...,t]
                     yield nframe, nw.nii_img.get_affine(), frame_data
-                    nframe += 1
+                    self.frame_idx += 1
             else:
                 if data:
                     pos = self._slice_locations.index(dw.slice_indicator)
                     if frame_data is None:
                         frame_data = np.empty(self._shape[:3])
                     frame_data[...,pos] = nw.nii_img.get_data()[...,0]
-                nslices += 1
-                if nslices == self.nslices:
-                    yield nframe, nw.nii_img.get_affine(), frame_data
-                    nframe += 1
-                    nslices = 0
+                self.slice_idx += 1
+                if self.slice_idx == self.nslices:
+                    self.frame_idx += 1
+                    self.slice_idx = 0
+                    yield self.frame_idx-1, nw.nii_img.get_affine(), frame_data
             
     
     def iter_slices(self, data=True, slice_order='acq_time'):
         # iterate on each slice in the temporal order they are acquired
         self._init_dataset()
-        nframe, nslices = 0, 0
         slices_buffer = [None]*self.nslices
 
         slice_seq = self._slice_order
@@ -1127,9 +1127,9 @@ class DicomStackOnline(DicomStack):
                 for sl in slice_seq:
                     if data:
                         slice_data = frame_data[...,sl]
-                    yield nframe, sl, nw.nii_img.get_affine(), \
+                    yield self.frame_idx, sl, nw.nii_img.get_affine(), \
                         self._slice_trigger_times[sl], slice_data
-                nframe += 1
+                self.frame_idx += 1
             elif self._nframes_per_dicom > 1:
                 if data:
                     frames_data = nw.nii_img.get_data()
@@ -1137,26 +1137,26 @@ class DicomStackOnline(DicomStack):
                     for sl in slice_seq:
                         if data:
                             slice_data = frames_data[...,sl,t]
-                            yield nframe, sl, nw.nii_img.get_affine(), \
+                            yield self.frame_idx, sl, nw.nii_img.get_affine(),\
                                 self._slice_trigger_times[sl], slice_data
-                    nframe += 1
+                    self.frame_idx += 1
             else:
                 # buffer incoming slices to
                 pos = self._slice_locations.index(dw.slice_indicator)
                 slices_buffer[pos] = dw,nw
-                sl = slice_seq[nslices]
+                sl = slice_seq[self.slice_idx]
                 while slices_buffer[sl] is not None:
                     dw,nw = slices_buffer[sl]
                     slices_buffer[sl] = None
                     if data:
                         slice_data = nw.nii_img.get_data()[...,0]
-                    yield nframe, sl, nw.nii_img.get_affine(), \
+                    yield self.frame_idx, sl, nw.nii_img.get_affine(), \
                         self._slice_trigger_times[sl], slice_data
-                    nslices += 1
-                    if nslices == self.nslices:
-                        nframe += 1
-                        nslices = 0
-                    sl = slice_seq[nslices]
+                    self.slice_idx += 1
+                    if self.slice_idx == self.nslices:
+                        self.frame_idx += 1
+                        self.slice_idx = 0
+                    sl = slice_seq[self.slice_idx]
             del dw
         
 def parse_and_group(src_paths, group_by=default_group_keys, extractor=None, 

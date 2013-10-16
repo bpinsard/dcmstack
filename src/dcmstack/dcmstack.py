@@ -601,10 +601,9 @@ class DicomStack(object):
         #Create an array for storing the voxel data
         stack_shape = self.get_shape()
         stack_dtype = self._files_info[0][0].nii_img.get_data_dtype()
-        #This is a hack to keep fslview happy, It seems unlikely it will cause 
-        #problems, but in theory some scaling could have been applied that 
-        #will cause this to overflow.
-        #TODO: Consider an alternative approach
+        #This is a hack to keep fslview happy, Shouldn't cause issues as the 
+        #original data should be 12-bit and any scaling will result in float 
+        #data
         if stack_dtype == np.uint16:
             stack_dtype = np.int16
         vox_array = np.empty(stack_shape, dtype=stack_dtype)        
@@ -682,7 +681,8 @@ class DicomStack(object):
         ----------
         voxel_order : str
             A three character string repsenting the voxel order in patient 
-            space (see the function `reorder_voxels`).
+            space (see the function `reorder_voxels`). Can be None or an empty 
+            string to disable reorientation.
             
         embed_meta : bool
             If true a dcmmeta.DcmMetaExtension will be embedded in the Nifti 

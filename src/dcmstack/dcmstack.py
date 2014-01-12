@@ -1076,10 +1076,10 @@ class DicomStackOnline(DicomStack):
     def iter_frame(self, data=True):
         # iterate on each acquired volume
         self._init_dataset()
+        frame_data = None
         for df in self._dicom_source:
             dw = wrapper_from_data(df)
             nw = NiftiWrapper.from_dicom_wrapper(dw)
-            frame_data = None
             if self._nframes_per_dicom is 1:
                 if data:
                     frame_data = nw.nii_img.get_data()
@@ -1098,13 +1098,12 @@ class DicomStackOnline(DicomStack):
                     pos = self._slice_locations.index(dw.slice_indicator)
                     if frame_data is None:
                         frame_data = np.empty(self._shape[:3])
-                    frame_data[...,pos] = nw.nii_img.get_data()[...,0]
+                    frame_data[...,pos] = np.squeeze(nw.nii_img.get_data())
                 self.slice_idx += 1
                 if self.slice_idx == self.nslices:
                     self.frame_idx += 1
                     self.slice_idx = 0
                     yield self.frame_idx-1, nw.nii_img.get_affine(), frame_data
-            
     
     def iter_slices(self, data=True, slice_order='acq_time'):
         # iterate on each slice in the temporal order they are acquired

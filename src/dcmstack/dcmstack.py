@@ -1057,7 +1057,7 @@ class DicomStackOnline(DicomStack):
                     self._slice_trigger_times.append(float(tt.value))
                 df = dicom_source.next()
                 dw = wrapper_from_data(df)
-            if self.nslices ==0:
+            if self.nslices == 0:
                 self.nslices = len(self._slice_locations)
             if not len(self._slice_trigger_times):
                 self._slice_trigger_times = np.linspace(
@@ -1069,6 +1069,12 @@ class DicomStackOnline(DicomStack):
             self._slice_locations = sorted(self._slice_locations)
         self._is_init = True
 
+        uniq_tt = np.unique(self._slice_trigger_times)
+        self._slabs = None
+        if (uniq_tt.size < self.nslices):
+            self._slabs = [(tt,np.where(self._slice_trigger_times==tt)[0]) \
+                               for tt in uniq_tt]
+            
 
     def set_source(self, dicom_source):
         self._dicom_source = dicom_source
@@ -1136,8 +1142,8 @@ class DicomStackOnline(DicomStack):
                     for sl in slice_seq:
                         if data:
                             slice_data = frames_data[...,sl,t]
-                            yield self.frame_idx, sl, nw.nii_img.get_affine(),\
-                                self._slice_trigger_times[sl], slice_data
+                        yield self.frame_idx, sl, nw.nii_img.get_affine(),\
+                            self._slice_trigger_times[sl], slice_data
                     self.frame_idx += 1
             else:
                 # buffer incoming slices to
@@ -1157,6 +1163,40 @@ class DicomStackOnline(DicomStack):
                         self.slice_idx = 0
                     sl = slice_seq[self.slice_idx]
             del dw
+
+    def iter_slab(self, data=True):
+
+        if self._slabs is None:
+            raise RuntimeError('no slabs')
+
+        for df in self._dicom_source:
+            dw = wrapper_from_data(df)
+            nw = NiftiWrapper.from_dicom_wrapper(dw)
+            slice_data = None
+            if self._nframes_per_dicom is 1:
+                if data:
+                    frame_data = nw.nii_img.get_data()
+                for sl in self._slabs:
+                    if data:
+                        slice_data = frame_data[...,sl[1]]
+                    yield self.frame_idx, sl, nw.nii_img.get_affine(), \
+                        self._slice_trigger_times[sl], slice_data
+                self.frame_idx += 1
+            elif self._nframes_per_dicom > 1:
+                if data:
+                    frames_data = nw.nii_img.get_data()
+                for t in xrange(self._nframes_per_dicom):
+                    for sl in self._slabs:
+                        if data:
+                            slice_data = frame_data[...,sl[1],t]
+                        yield self.frame_idx, sl, nw.nii_img.get_affine(), \
+                            self._slice_trigger_times[sl], slice_data
+                    self.frame_idx += 1
+            else:
+                raise NotImplementedError(
+                    'does not handle slabs stored in separate dicoms')
+            del dw
+
         
 def parse_and_group(src_paths, group_by=default_group_keys, extractor=None, 
                     force=False, warn_on_except=False, 

@@ -1110,6 +1110,7 @@ class DicomStackOnline(DicomStack):
                     self.frame_idx += 1
                     self.slice_idx = 0
                     yield self.frame_idx-1, nw.nii_img.get_affine(), frame_data
+            del dw, nw
     
     def iter_slices(self, data=True, slice_order='acq_time'):
         # iterate on each slice in the temporal order they are acquired
@@ -1162,7 +1163,7 @@ class DicomStackOnline(DicomStack):
                         self.frame_idx += 1
                         self.slice_idx = 0
                     sl = slice_seq[self.slice_idx]
-            del dw
+            del dw,nw
 
     def iter_slab(self, data=True):
 
@@ -1195,7 +1196,7 @@ class DicomStackOnline(DicomStack):
             else:
                 raise NotImplementedError(
                     'does not handle slabs stored in separate dicoms')
-            del dw
+            del dw,nw
 
         
 def parse_and_group(src_paths, group_by=default_group_keys, extractor=None, 

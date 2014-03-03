@@ -1072,8 +1072,9 @@ class DicomStackOnline(DicomStack):
         uniq_tt = np.unique(self._slice_trigger_times)
         self._slabs = None
         if (uniq_tt.size < self.nslices):
-            self._slabs = [(tt,np.where(self._slice_trigger_times==tt)[0]) \
-                               for tt in uniq_tt]
+            self._slabs = [
+                (tt,np.where(self._slice_trigger_times==tt)[0].tolist()) \
+                    for tt in uniq_tt]
             
 
     def set_source(self, dicom_source):
@@ -1166,6 +1167,7 @@ class DicomStackOnline(DicomStack):
             del dw,nw
 
     def iter_slab(self, data=True):
+        self._init_dataset()
 
         if self._slabs is None:
             raise RuntimeError('no slabs')
@@ -1180,8 +1182,8 @@ class DicomStackOnline(DicomStack):
                 for sl in self._slabs:
                     if data:
                         slice_data = frame_data[...,sl[1]]
-                    yield self.frame_idx, sl, nw.nii_img.get_affine(), \
-                        self._slice_trigger_times[sl], slice_data
+                    yield self.frame_idx, sl[1], nw.nii_img.get_affine(), \
+                        sl[0], slice_data
                 self.frame_idx += 1
             elif self._nframes_per_dicom > 1:
                 if data:
@@ -1190,8 +1192,8 @@ class DicomStackOnline(DicomStack):
                     for sl in self._slabs:
                         if data:
                             slice_data = frame_data[...,sl[1],t]
-                        yield self.frame_idx, sl, nw.nii_img.get_affine(), \
-                            self._slice_trigger_times[sl], slice_data
+                        yield self.frame_idx, sl[1], nw.nii_img.get_affine(),\
+                            sl[0], slice_data
                     self.frame_idx += 1
             else:
                 raise NotImplementedError(

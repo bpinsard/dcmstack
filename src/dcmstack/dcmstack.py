@@ -1090,16 +1090,16 @@ class DicomStackOnline(DicomStack):
             if self._nframes_per_dicom is 1:
                 if data:
                     frame_data = nw.nii_img.get_data()
-                yield self.frame_idx, nw.nii_img.get_affine(), frame_data
                 self.frame_idx += 1
+                yield self.frame_idx-1, nw.nii_img.get_affine(), frame_data
             elif self._nframes_per_dicom > 1:
                 if data:
                     frames_data = nw.nii_img.get_data()
                 for t in xrange(self._shape[-1]):
                     if data:
                         frame_data = frames_data[...,t]
-                    yield nframe, nw.nii_img.get_affine(), frame_data
                     self.frame_idx += 1
+                    yield self.frame_idx-1, nw.nii_img.get_affine(),frame_data
             else:
                 if data:
                     pos = self._slice_locations.index(dw.slice_indicator)
@@ -1110,7 +1110,7 @@ class DicomStackOnline(DicomStack):
                 if self.slice_idx == self.nslices:
                     self.frame_idx += 1
                     self.slice_idx = 0
-                    yield self.frame_idx-1, nw.nii_img.get_affine(), frame_data
+                    yield self.frame_idx-1, nw.nii_img.get_affine(),frame_data
             del dw, nw
     
     def iter_slices(self, data=True, slice_order='acq_time'):
@@ -1166,11 +1166,15 @@ class DicomStackOnline(DicomStack):
                     sl = slice_seq[self.slice_idx]
             del dw,nw
 
-    def iter_slab(self, data=True):
+    def iter_slabs(self, data=True):
         self._init_dataset()
 
         if self._slabs is None:
-            raise RuntimeError('no slabs')
+            for fr, sl, aff, tt, data in self.iter_slices(data=data):
+                if not data is None:
+                    yield fr, [sl], aff, tt, data[...,np.newaxis]
+                else:
+                    yield fr, [sl], aff, tt, data
 
         for df in self._dicom_source:
             dw = wrapper_from_data(df)

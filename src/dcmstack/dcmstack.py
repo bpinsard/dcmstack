@@ -1039,7 +1039,11 @@ class DicomStackOnline(DicomStack):
         if dw.is_mosaic:
             self._slice_trigger_times = dw.csa_header['tags'].get(
                 'MosaicRefAcqTimes')['items']
-            self._slice_order = np.argsort(self._slice_trigger_times)
+            self._slice_order = np.argsort(
+                np.array(zip(self._slice_trigger_times,
+                             np.arange(self.nslices)),
+                         dtype=[('trigger_times','f'),('slice','i')]),
+                order=['trigger_times','slice'], axis=0)
         elif dw.is_multiframe:
             self._slice_order = np.arange(self.nslices)
             tr=dw.shared.MRTimingAndRelatedParametersSequence[0].RepetitionTime

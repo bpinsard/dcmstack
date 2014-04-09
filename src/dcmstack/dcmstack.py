@@ -841,8 +841,8 @@ class DicomStackOnline(DicomStack):
 
         dicom_source, self._dicom_source = itertools.tee(self._dicom_source)
         dw = wrapper_from_data(dicom_source.next())
-        affine = dw.get_affine()
-        self._voxel_size = np.sqrt((affine[:3,:3]**2).sum(0))
+        self._affine = dw.get_affine()
+        self._voxel_size = np.sqrt((self._affine[:3,:3]**2).sum(0))
         self._shape = dw.image_shape
         self._nframes_per_dicom = 1
         self.nframes, self.nslices = 0, 0

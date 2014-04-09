@@ -841,6 +841,8 @@ class DicomStackOnline(DicomStack):
 
         dicom_source, self._dicom_source = itertools.tee(self._dicom_source)
         dw = wrapper_from_data(dicom_source.next())
+        affine = dw.get_affine()
+        self._voxel_size = np.sqrt((affine[:3,:3]**2).sum(0))
         self._shape = dw.image_shape
         self._nframes_per_dicom = 1
         self.nframes, self.nslices = 0, 0
@@ -869,7 +871,11 @@ class DicomStackOnline(DicomStack):
         if dw.is_mosaic:
             self._slice_trigger_times = dw.csa_header['tags'].get(
                 'MosaicRefAcqTimes')['items']
-            self._slice_order = np.argsort(self._slice_trigger_times)
+            self._slice_order = np.argsort(
+                np.array(zip(self._slice_trigger_times,
+                             np.arange(self.nslices)),
+                         dtype=[('trigger_times','f'),('slice','i')]),
+                order=['trigger_times','slice'], axis=0)
         elif dw.is_multiframe:
             self._slice_order = np.arange(self.nslices)
             tr=dw.shared.MRTimingAndRelatedParametersSequence[0].RepetitionTime
@@ -887,7 +893,7 @@ class DicomStackOnline(DicomStack):
                     self._slice_trigger_times.append(float(tt.value))
                 df = dicom_source.next()
                 dw = wrapper_from_data(df)
-            if self.nslices ==0:
+            if self.nslices == 0:
                 self.nslices = len(self._slice_locations)
             if not len(self._slice_trigger_times):
                 self._slice_trigger_times = np.linspace(
@@ -899,6 +905,13 @@ class DicomStackOnline(DicomStack):
             self._slice_locations = sorted(self._slice_locations)
         self._is_init = True
 
+        uniq_tt = np.unique(self._slice_trigger_times)
+        self._slabs = None
+        if (uniq_tt.size < self.nslices):
+            self._slabs = [
+                (tt,np.where(self._slice_trigger_times==tt)[0].tolist()) \
+                    for tt in uniq_tt]
+            
 
     def set_source(self, dicom_source):
         self._dicom_source = dicom_source
@@ -913,16 +926,16 @@ class DicomStackOnline(DicomStack):
             if self._nframes_per_dicom is 1:
                 if data:
                     frame_data = nw.nii_img.get_data()
-                yield self.frame_idx, nw.nii_img.get_affine(), frame_data
                 self.frame_idx += 1
+                yield self.frame_idx-1, nw.nii_img.get_affine(), frame_data
             elif self._nframes_per_dicom > 1:
                 if data:
                     frames_data = nw.nii_img.get_data()
                 for t in xrange(self._shape[-1]):
                     if data:
                         frame_data = frames_data[...,t]
-                    yield nframe, nw.nii_img.get_affine(), frame_data
                     self.frame_idx += 1
+                    yield self.frame_idx-1, nw.nii_img.get_affine(),frame_data
             else:
                 if data:
                     pos = self._slice_locations.index(dw.slice_indicator)
@@ -933,7 +946,8 @@ class DicomStackOnline(DicomStack):
                 if self.slice_idx == self.nslices:
                     self.frame_idx += 1
                     self.slice_idx = 0
-                    yield self.frame_idx-1, nw.nii_img.get_affine(), frame_data
+                    yield self.frame_idx-1, nw.nii_img.get_affine(),frame_data
+            del dw, nw
     
     def iter_slices(self, data=True, slice_order='acq_time'):
         # iterate on each slice in the temporal order they are acquired
@@ -966,8 +980,8 @@ class DicomStackOnline(DicomStack):
                     for sl in slice_seq:
                         if data:
                             slice_data = frames_data[...,sl,t]
-                            yield self.frame_idx, sl, nw.nii_img.get_affine(),\
-                                self._slice_trigger_times[sl], slice_data
+                        yield self.frame_idx, sl, nw.nii_img.get_affine(),\
+                            self._slice_trigger_times[sl], slice_data
                     self.frame_idx += 1
             else:
                 # buffer incoming slices to
@@ -986,7 +1000,46 @@ class DicomStackOnline(DicomStack):
                         self.frame_idx += 1
                         self.slice_idx = 0
                     sl = slice_seq[self.slice_idx]
-            del dw
+            del dw,nw
+
+    def iter_slabs(self, data=True):
+        self._init_dataset()
+
+        if self._slabs is None:
+            for fr, sl, aff, tt, data in self.iter_slices(data=data):
+                if not data is None:
+                    yield fr, [sl], aff, tt, data[...,np.newaxis]
+                else:
+                    yield fr, [sl], aff, tt, data
+
+        for df in self._dicom_source:
+            dw = wrapper_from_data(df)
+            nw = NiftiWrapper.from_dicom_wrapper(dw)
+            slice_data = None
+            if self._nframes_per_dicom is 1:
+                if data:
+                    frame_data = nw.nii_img.get_data()
+                for sl in self._slabs:
+                    if data:
+                        slice_data = frame_data[...,sl[1]]
+                    yield self.frame_idx, sl[1], nw.nii_img.get_affine(), \
+                        sl[0], slice_data
+                self.frame_idx += 1
+            elif self._nframes_per_dicom > 1:
+                if data:
+                    frames_data = nw.nii_img.get_data()
+                for t in xrange(self._nframes_per_dicom):
+                    for sl in self._slabs:
+                        if data:
+                            slice_data = frame_data[...,sl[1],t]
+                        yield self.frame_idx, sl[1], nw.nii_img.get_affine(),\
+                            sl[0], slice_data
+                    self.frame_idx += 1
+            else:
+                raise NotImplementedError(
+                    'does not handle slabs stored in separate dicoms')
+            del dw,nw
+
         
 def parse_and_group(src_paths, group_by=default_group_keys, extractor=None, 
                     force=False, warn_on_except=False, 

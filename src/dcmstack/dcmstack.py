@@ -1096,7 +1096,8 @@ class DicomStackOnline(DicomStack):
         # iterate on each acquired volume
         self._init_dataset()
         frame_data = None
-        for df in self._dicom_source:
+        dicom_source, self._dicom_source = itertools.tee(self._dicom_source)
+        for df in dicom_source:
             dw = wrapper_from_data(df)
             nw = NiftiWrapper.from_dicom_wrapper(dw)
             if self._nframes_per_dicom is 1:
@@ -1136,7 +1137,8 @@ class DicomStackOnline(DicomStack):
         elif slice_order is 'descending':
             slice_seq = np.arange(self.nslices,0,-1)-1
 
-        for df in self._dicom_source:
+        dicom_source, self._dicom_source = itertools.tee(self._dicom_source)
+        for df in dicom_source:
             dw = wrapper_from_data(df)
             nw = NiftiWrapper.from_dicom_wrapper(dw)
             slice_data = None
@@ -1188,7 +1190,8 @@ class DicomStackOnline(DicomStack):
                 else:
                     yield fr, [sl], aff, tt, data
 
-        for df in self._dicom_source:
+        dicom_source, self._dicom_source = itertools.tee(self._dicom_source)
+        for df in dicom_source:
             dw = wrapper_from_data(df)
             nw = NiftiWrapper.from_dicom_wrapper(dw)
             slice_data = None

@@ -1003,7 +1003,8 @@ class DicomStack(object):
         generated from the result.
         '''
         return NiftiWrapper(self.to_nifti(voxel_order, True))
-
+    
+import collections
 class DicomStackOnline(DicomStack):
 
     def _init_dataset(self):
@@ -1013,8 +1014,7 @@ class DicomStackOnline(DicomStack):
         self._shape = None        
         self._slice_order = None
         self.frame_idx, self.slice_idx = 0, 0
-
-        import collections
+        
         self._dicom_queue = collections.deque()
         
         dw = wrapper_from_data(self._iter_dicoms(queue_dicoms=True).next())
@@ -1085,12 +1085,9 @@ class DicomStackOnline(DicomStack):
         self._is_init = True
 
         uniq_tt = np.unique(self._slice_trigger_times)
-        self._slabs = None
-        if (uniq_tt.size < self.nslices):
-            self._slabs = [
-                (tt,np.where(self._slice_trigger_times==tt)[0].tolist()) \
-                    for tt in uniq_tt]
-            
+        self._slabs = [(tt,np.where(self._slice_trigger_times==tt)[0].tolist())\
+                           for tt in uniq_tt]
+
 
     def set_source(self, dicom_source):
         self._dicom_source = iter(dicom_source)
@@ -1124,7 +1121,6 @@ class DicomStackOnline(DicomStack):
                 if data:
                     frame_data = nw.nii_img.get_data()
                 frame_idx += 1
-                yield frame_idx-1, nw.nii_img.get_affine(), frame_data
             elif self._nframes_per_dicom > 1:
                 if data:
                     frames_data = nw.nii_img.get_data()
@@ -1132,7 +1128,11 @@ class DicomStackOnline(DicomStack):
                     if data:
                         frame_data = frames_data[...,t]
                     frame_idx += 1
-                    yield frame_idx-1, nw.nii_img.get_affine(),frame_data
+                    if not queue_dicoms:
+                        self.frame_idx = frame_idx
+                        self.slice_idx = slice_idx
+                    yield frame_idx-1, nw.nii_img.get_affine(), frame_data
+                continue
             else:
                 if data:
                     pos = self._slice_locations.index(dw.slice_indicator)
@@ -1143,11 +1143,12 @@ class DicomStackOnline(DicomStack):
                 if self.slice_idx == self.nslices:
                     frame_idx += 1
                     slice_idx = 0
-                    yield frame_idx-1, nw.nii_img.get_affine(),frame_data
+                else:
+                    continue
             if not queue_dicoms:
                 self.frame_idx = frame_idx
                 self.slice_idx = slice_idx
-
+            yield frame_idx-1, nw.nii_img.get_affine(), frame_data
             del dw, nw
     
     def iter_slices(self, data=True, slice_order='acq_time', queue_dicoms=False):

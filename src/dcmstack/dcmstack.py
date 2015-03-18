@@ -1256,7 +1256,7 @@ class DicomStackOnline(DicomStack):
                 self.slice_idx = slice_idx
         
 def parse_and_group(src_paths, group_by=default_group_keys, extractor=None,
-                    force=False, warn_on_except=False,
+                    force=False, warn_on_except=False, defer_size=None,
                     close_tests=('ImageOrientationPatient',)):
     '''Parse the given dicom files and group them together. Each group is
     stored as a (list) value in a dict where the key is a tuple of values
@@ -1282,6 +1282,10 @@ def parse_and_group(src_paths, group_by=default_group_keys, extractor=None,
     warn_on_except : bool
         Convert exceptions into warnings, possibly allowing some results to be
         returned.
+
+    defer_size : int or None
+        How much of data to read in case you just want to obtain group of data 
+        but not use voxel data, for speedup
 
     close_tests : sequence
         Any `group_by` key listed here is tested with `numpy.allclose` instead

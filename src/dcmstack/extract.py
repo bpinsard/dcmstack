@@ -11,10 +11,22 @@ try:
     from collections import OrderedDict
 except ImportError:
     from ordereddict import OrderedDict
+try:
+    import chardet
+    have_chardet = True
+except ImportError:
+    have_chardet = False
+    pass
 
 #This is needed to allow extraction on files with invalid values (e.g. too
 #long of a decimal string)
 dicom.config.enforce_valid_values = False
+
+def is_ascii(in_str):
+    '''Return true if the given string is valid ASCII.'''
+    if all(' ' <= c <= '~' for c in in_str):
+        return True
+    return False
 
 def ignore_private(elem):
     '''Ignore rule for `MetaExtractor` to skip private DICOM elements (odd
@@ -23,16 +35,20 @@ def ignore_private(elem):
         return True
     return False
 
-def ignore_non_ascii_bytes(elem):
-    '''Ignore rule for `MetaExtractor` to skip elements with VR of 'OW', 'OB',
-    or 'UN' if the byte string contains non ASCII characters.'''
-    if elem.VR in ('OW', 'OB', 'OW or OB', 'UN'):
-        if not all(' ' <= c <= '~' for c in elem.value):
-            return True
-    return False
+def ignore_pixel_data(elem):
+    return elem.tag == dicom.tag.Tag(0x7fe0, 0x10)
+
+def ignore_overlay_data(elem):
+    return elem.tag.group & 0xff00 == 0x6000 and elem.tag.elem == 0x3000
+
+def ignore_color_lut_data(elem):
+    return (elem.tag.group == 0x28 and
+            elem.tag.elem in (0x1201, 0x1202, 0x1203, 0x1221, 0x1222, 0x1223))
 
 default_ignore_rules = (ignore_private,
-                        ignore_non_ascii_bytes)
+                        ignore_pixel_data,
+                        ignore_overlay_data,
+                        ignore_color_lut_data)
 '''The default tuple of ignore rules for `MetaExtractor`.'''
 
 
@@ -77,7 +93,6 @@ def simplify_csa_dict(csa_dict):
 def csa_image_trans_func(elem):
     '''Function for translating the CSA image sub header.'''
     return simplify_csa_dict(csareader.read(elem.value))
-
 
 csa_image_trans = Translator('CsaImage',
                              dicom.tag.Tag(0x29, 0x1010),
@@ -178,7 +193,7 @@ def parse_phoenix_prot(prot_key, prot_val):
         str_delim = '"'
     else:
         raise ValueError('Unknown protocol key: %s' % prot_key)
-    ascconv_start = prot_val.find('### ASCCONV BEGIN ###')
+    ascconv_start = prot_val.find('### ASCCONV BEGIN ')
     ascconv_end = prot_val.find('### ASCCONV END ###')
     ascconv = prot_val[ascconv_start:ascconv_end].split('\n')[1:-1]
 
@@ -265,24 +280,36 @@ def tm_to_seconds(time_str):
 
     return float(result)
 
+def get_text(byte_str):
+    '''If the given byte string contains text data return it as unicode,
+    otherwise return None.
+
+    If the 'chardet' package is installed, this will be used to detect the
+    text encoding. Otherwise the input will only be decoded if it is ASCII.
+    '''
+    if have_chardet:
+        match = chardet.detect(byte_str)
+        if match['encoding'] is None:
+            return None
+        else:
+            return byte_str.decode(match['encoding'])
+    else:
+        if not is_ascii(byte_str):
+            return None
+        else:
+            return byte_str.decode('ascii')
+
 default_conversions = {'DS' : float,
                        'IS' : int,
                        'AT' : str,
-                       #'TM' : tm_to_seconds
+                       'OW' : get_text,
+                       'OB' : get_text,
+                       'OW or OB' : get_text,
+                       'OB or OW' : get_text,
+                       'UN' : get_text,
+                       'PN' : unicode,
+                       'UI' : unicode,
                       }
-
-def make_unicode(in_str):
-    '''Try to convetrt in_str to unicode'''
-    for encoding in ('utf8', 'latin1'):
-        try:
-            result = unicode(in_str, encoding=encoding)
-        except UnicodeDecodeError:
-            pass
-        else:
-            break
-    else:
-        raise ValueError("Unable to determine string encoding: %s" % in_str)
-    return result
 
 class MetaExtractor(object):
     '''Callable object for extracting meta data from a dicom dataset.
@@ -401,6 +428,9 @@ class MetaExtractor(object):
         #Make dict to track which tags map to which translators
         trans_map = {}
 
+        # Convert text elements to unicode
+        dcm.decode()
+
         for elem in dcm:
             if isinstance(elem.value, str) and elem.value.strip() == '':
                 continue
@@ -443,14 +473,15 @@ class MetaExtractor(object):
                 value = []
                 for val in elem.value:
                     value.append(self(val))
+                if all(x is None for x in value):
+                    continue
                 standard_meta.append((name, value, elem.tag))
             #Otherwise just make sure the value is unpacked
             else:
-                standard_meta.append((name,
-                                      self._get_elem_value(elem),
-                                      elem.tag
-                                     )
-                                    )
+                value = self._get_elem_value(elem)
+                if value is None:
+                    continue
+                standard_meta.append((name, value, elem.tag))
 
         #Handle name collisions
         name_counts = defaultdict(int)
@@ -467,15 +498,6 @@ class MetaExtractor(object):
             for name, value in meta.iteritems():
                 name = '%s.%s' % (trans_name, name)
                 result[name] = value
-
-        #Make sure all string values are unicode
-        for name, value in result.iteritems():
-            if isinstance(value, str):
-                result[name] = make_unicode(value)
-            elif (isinstance(value, list) and
-                  len(value) > 0 and
-                  isinstance(value[0], str)):
-                result[name] = [make_unicode(val) for val in value]
 
         return result
 

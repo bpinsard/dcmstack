@@ -204,7 +204,7 @@ class DcmMetaExtension(Nifti1Extension):
                        ('vector', 'samples'),
                        ('vector', 'slices'),
                       )
-    '''The classifications used to seperate meta data based on if and how the
+    '''The classifications used to separate meta data based on if and how the
     values repeat. Each class is a tuple with a base class and a sub class.'''
 
     def get_valid_classes(self):
@@ -1193,7 +1193,7 @@ class MissingExtensionError(Exception):
 
 def patch_dcm_ds_is(dcm):
     '''Convert all elements in `dcm` with VR of 'DS' or 'IS' to floats and ints.
-    This is a hackish work around for the backwards incompatability of pydicom
+    This is a hackish work around for the backwards incompatibility of pydicom
     0.9.7 and should not be needed once nibabel is updated.
     '''
     for elem in dcm:
@@ -1391,8 +1391,8 @@ class NiftiWrapper(object):
         else:
             raise IndexError('Extension not found in header')
         del hdr.extensions[target_idx]
-        #Nifti1Image.update_header will increase this if necessary
-        hdr['vox_offset'] = 352
+        # Nifti1Image.update_header will increase this if necessary
+        hdr['vox_offset'] = 0
 
     def replace_extension(self, dcmmeta_ext):
         '''Replace the DcmMetaExtension.
@@ -1704,7 +1704,7 @@ class NiftiWrapper(object):
                     last_trans = in_trans
 
                 #Check that axis vectors match
-                if not np.allclose(in_vec, axis_vec):
+                if not np.allclose(in_vec, axis_vec, atol=5e-4):
                     raise ValueError("Cannot join images with different "
                                      "orientations.")
 
